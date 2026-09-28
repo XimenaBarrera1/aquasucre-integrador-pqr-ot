@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>AquaSucre E.S.P. - Integrador PQR -> OT</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f8f9fa; margin: 0; padding: 40px; }
+        .contenedor { max-width: 900px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { margin-bottom: 5px; color: #333; }
+        .subtitulo { color: #666; margin-bottom: 25px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f1f3f5; }
+        .alerta-info { background: #e7f5ff; color: #1c7ed6; padding: 12px; border-radius: 4px; margin-bottom: 15px; }
+        .alerta-error { background: #ffe3e3; color: #e03131; padding: 12px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="contenedor">
+        <h1>AquaSucre E.S.P.</h1>
+        <div class="subtitulo">Integrador PQR &rarr; Órdenes de Trabajo</div>
+
+        <div class="alerta-info">
+            Versión inicial de solo lectura. Todavía no crea ni modifica órdenes de trabajo.
+        </div>
+
+        {% if error %}
+            <div class="alerta-error">{{ error }}</div>
+        {% else %}
+            <h3>PQR registradas</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>PQR</th>
+                        <th>Asunto</th>
+                        <th>Estado</th>
+                        <th>Prioridad</th>
+                        <th>Fecha</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for t in pqrs %}
+                    <tr>
+                        <td><strong>{{ t.name }}</strong></td>
+                        <td>{{ t.subject }}</td>
+                        <td>{{ t.status }}</td>
+                        <td>{{ t.priority }}</td>
+                        <td>{{ t.creation }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5">No se encontraron PQR registradas.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    </div>
+</body>
+</html>
