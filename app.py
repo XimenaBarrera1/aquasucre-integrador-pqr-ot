@@ -35,11 +35,41 @@ ESTADOS_FRAPPE = {
     "CLOSED": "FINALIZADA",
 }
 
+ESTADOS_A_FRAPPE = {
+    "FINALIZADA": "Closed",
+    "EN_ATENCION": "Replied",
+    "PENDIENTE": "Open",
+}
+
 
 def normalizar_estado_frappe(estado):
     if not estado or not isinstance(estado, str):
         return "PENDIENTE"
     return ESTADOS_FRAPPE.get(estado.strip().upper(), "PENDIENTE")
+
+
+def actualizar_estado_frappe(id_pqr, nuevo_estado="Closed"):
+    """
+    Envía una petición PUT a la API de Frappe/Helpdesk para cambiar el estado del ticket.
+    Estados válidos en Helpdesk: 'Open', 'Replied', 'Resolved', 'Closed'
+    """
+    if not FRAPPE_URL or not FRAPPE_API_KEY or not FRAPPE_API_SECRET:
+        raise RuntimeError("Faltan variables de entorno de Frappe.")
+
+    url = f"{FRAPPE_URL}/api/resource/HD%20Ticket/{id_pqr}"
+    headers = {
+        "Authorization": f"token {FRAPPE_API_KEY}:{FRAPPE_API_SECRET}",
+        "Content-Type": "application/json",
+    }
+    
+    response = requests.put(
+        url, 
+        headers=headers, 
+        json={"status": nuevo_estado}, 
+        timeout=15
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def normalizar_orden(payload):
@@ -161,6 +191,40 @@ def inicio():
 @app.route("/health")
 def health():
     return {"status": "ok"}, 200
+
+
+@app.route("/api/finalizar-pqr", methods=["POST"])
+def finalizar_pqr():
+    """
+    Endpoint para que la App del Técnico / PWD solicite finalizar una PQR.
+    Actualiza simultáneamente Helpdesk (Frappe) a 'Closed' y Neon a 'FINALIZADA'.
+    """
+    data = request.get_json() or {}
+    id_pqr = data.get("id_pqr")
+    estado_frappe = data.get("estado_frappe", "Closed")
+
+    if not id_pqr:
+        return jsonify({"error": "El campo 'id_pqr' es obligatorio"}), 400
+
+    try:
+        # 1. Actualizar estado en Frappe/Helpdesk
+        actualizar_estado_frappe(id_pqr, nuevo_estado=estado_frappe)
+
+        # 2. Actualizar estado en la base de datos Neon
+        with psycopg.connect(DATABASE_URL) as conexion:
+            with conexion.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE ordenes_trabajo SET estado = 'FINALIZADA' WHERE id_pqr = %s",
+                    (id_pqr,)
+                )
+
+        return jsonify({
+            "status": "ok", 
+            "message": f"PQR {id_pqr} finalizada correctamente en Helpdesk y Neon DB."
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # Iniciar el sincronizador (poller.py) en un hilo en segundo plano
