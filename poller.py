@@ -119,6 +119,62 @@ def consultar_pagina(fecha_desde, inicio):
     return data
 
 
+def actualizar_estado_en_frappe(id_pqr, nuevo_estado="Closed"):
+    """Envía una petición PUT a la API de Frappe/Helpdesk para cambiar el estado del ticket."""
+    url = f"{FRAPPE_URL}/api/resource/HD%20Ticket/{id_pqr}"
+    headers = {
+        "Authorization": f"token {FRAPPE_API_KEY}:{FRAPPE_API_SECRET}",
+        "Content-Type": "application/json",
+    }
+    try:
+        r = requests.put(
+            url, headers=headers, json={"status": nuevo_estado}, timeout=15
+        )
+        if r.status_code == 200:
+            logger.info("PQR %s actualizada exitosamente a '%s' en Helpdesk.", id_pqr, nuevo_estado)
+        else:
+            logger.warning("No se pudo actualizar PQR %s en Helpdesk: %s", id_pqr, r.text)
+    except Exception as e:
+        logger.error("Error al conectar con Helpdesk para actualizar PQR %s: %s", id_pqr, e)
+
+
+def sincronizar_finalizadas_hacia_frappe():
+    """Busca PQRs finalizadas en Neon DB que sigan abiertas en Helpdesk y las cierra."""
+    with psycopg.connect(DATABASE_URL) as conexion:
+        with conexion.cursor() as cursor:
+            cursor.execute("SELECT id_pqr FROM ordenes_trabajo WHERE estado = 'FINALIZADA'")
+            finalizadas_db = {row[0] for row in cursor.fetchall()}
+
+    if not finalizadas_db:
+        return
+
+    # Consultar tickets en Frappe que están en Open o Replied
+    respuesta = requests.get(
+        f"{FRAPPE_URL}/api/resource/HD%20Ticket",
+        headers={
+            "Authorization": f"token {FRAPPE_API_KEY}:{FRAPPE_API_SECRET}",
+        },
+        params={
+            "fields": json.dumps(["name", "status"]),
+            "filters": json.dumps([["status", "in", ["Open", "Replied"]]]),
+            "limit_page_length": TAMANO_PAGINA,
+        },
+        timeout=20,
+    )
+    respuesta.raise_for_status()
+    tickets_abiertos = respuesta.json().get("data", [])
+
+    for ticket in tickets_abiertos:
+        id_pqr = ticket.get("name")
+        if id_pqr in finalizadas_db:
+            logger.info(
+                "PQR %s está FINALIZADA en Neon pero '%s' en Helpdesk. Sincronizando a 'Closed'...",
+                id_pqr,
+                ticket.get("status"),
+            )
+            actualizar_estado_en_frappe(id_pqr, "Closed")
+
+
 def sincronizar_cambios():
     ultima_modificacion = obtener_ultima_modificacion()
     inicio = 0
@@ -183,9 +239,14 @@ def main():
 
     while True:
         try:
+            # 1. Traer novedades desde Frappe -> Neon
             cantidad = sincronizar_cambios()
             if cantidad:
                 logger.info("Sincronizados %s tickets de Frappe a Neon PostgreSQL.", cantidad)
+
+            # 2. Enviar PQRs finalizadas desde Neon -> Frappe
+            sincronizar_finalizadas_hacia_frappe()
+
         except (psycopg.Error, requests.RequestException, ValueError, RuntimeError):
             logger.exception("Falló la sincronización; se volverá a intentar en el siguiente ciclo.")
         time.sleep(INTERVALO_SEGUNDOS)
