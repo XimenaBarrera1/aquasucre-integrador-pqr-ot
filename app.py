@@ -1,10 +1,11 @@
 import os
+import re
 import threading
 import time
-import requests
 import psycopg
+import requests
 from dotenv import load_dotenv
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, jsonify, render_template, request
 
 load_dotenv()
 
@@ -42,23 +43,58 @@ def normalizar_estado_frappe(estado):
 
 
 def normalizar_orden(payload):
-    id_pqr = str(payload.get("name") or "").strip()
+    id_pqr = str(
+        payload.get("name") or payload.get("id_pqr") or ""
+    ).strip()
     if not id_pqr:
         raise ValueError("El campo 'id_pqr' es obligatorio.")
 
-    tipo_servicio = str(payload.get("tipo_servicio") or "Atención PQR").strip()
-    descripcion = str(payload.get("descripcion") or "Sin descripción").strip()
-    direccion = str(payload.get("direccion") or "No especificada").strip()
+    subject_raw = str(payload.get("subject") or "").strip()
+    descripcion = str(
+        payload.get("descripcion")
+        or payload.get("description")
+        or "Sin descripción"
+    ).strip()
+
+    # 1. Intentar extraer la dirección desde la descripción ("Direccion: CL ...")
+    direccion = ""
+    match_dir = re.search(r"Direccion:\s*(.*)", descripcion, re.IGNORECASE)
+    if match_dir:
+        direccion = match_dir.group(1).split("\n")[0].strip()
+
+    # 2. Separar Tipo de Servicio y Dirección desde el asunto (subject) si viene como "Servicio - Dirección"
+    tipo_servicio = subject_raw
+    if " - " in subject_raw:
+        partes = subject_raw.split(" - ", 1)
+        tipo_servicio = partes[0].strip()
+        # Si no se encontró en la descripción, usar la segunda parte del asunto
+        if not direccion:
+            direccion = partes[1].strip()
+
+    # Respaldos por si la extracción falla
+    if not direccion:
+        direccion = str(
+            payload.get("direccion") or "No especificada"
+        ).strip()
+
+    if not tipo_servicio:
+        tipo_servicio = str(
+            payload.get("tipo_servicio") or "Atención PQR"
+        ).strip()
 
     # Ajuste de límites según esquema de Neon PostgreSQL
     id_pqr = id_pqr[:30]
     tipo_servicio = tipo_servicio[:100]
     direccion = direccion[:200]
 
-    prioridad_raw = str(payload.get("prioridad", "MEDIA")).strip().upper()
+    prioridad_raw = str(
+        payload.get("prioridad") or payload.get("priority") or "MEDIA"
+    ).strip().upper()
     prioridad = PRIORIDADES.get(prioridad_raw, "MEDIA")
 
-    estado = normalizar_estado_frappe(payload.get("estado_frappe"))
+    estado = normalizar_estado_frappe(
+        payload.get("estado_frappe") or payload.get("status")
+    )
 
     return {
         "id_pqr": id_pqr,
@@ -104,11 +140,11 @@ def obtener_pqrs():
         f"{FRAPPE_URL}/api/resource/HD%20Ticket",
         headers={"Authorization": f"token {FRAPPE_API_KEY}:{FRAPPE_API_SECRET}"},
         params={
-            "fields": '["name","subject","status","priority","creation"]',
+            "fields": '["name","subject","description","status","priority","creation"]',
             "order_by": "creation desc",
-            "limit_page_length": 100
+            "limit_page_length": 100,
         },
-        timeout=20
+        timeout=20,
     )
     r.raise_for_status()
     return r.json().get("data", [])
@@ -132,9 +168,11 @@ def _arrancar_poller_background():
     time.sleep(3)  # Espera breve para asegurar carga completa
     try:
         import poller
+
         poller.main()
     except Exception as e:
         print(f"[ERROR BACKGROUND POLLER] {e}")
+
 
 threading.Thread(target=_arrancar_poller_background, daemon=True).start()
 
